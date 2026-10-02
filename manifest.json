@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "requires": { "cockpit": "265" },
+  "menu": { "index": { "label": "Pi monitor", "order": 15, "keywords": [{"matches": ["graphs", "ram", "cpu", "processes", "performance"]}] } },
+  "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:"
+}

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pi monitor</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="../base1/cockpit.js"></script>
+  <script src="ram-model.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+<main>
+  <header class="page-header">
+    <div><div class="eyebrow">SYSTEM PERFORMANCE</div><h1>Pi monitor</h1><p class="subtitle">A clearer view of your Pi.</p></div>
+    <div class="controls"><span id="connection" class="status">Connecting…</span><label for="range" class="sr-only">Graph time range</label><select id="range"><option value="30">Last 30 minutes</option><option value="60" selected>Last hour</option><option value="360">Last 6 hours</option><option value="1440">Last 24 hours</option></select><button id="refresh" title="Reload recorded history">Refresh</button></div>
+  </header>
+  <div id="error" role="status" hidden></div>
+  <section class="summary" aria-label="Current system metrics">
+    <div><span class="summary-label">CPU</span><strong id="cpu-now">—</strong><small id="load-now">Waiting for live data</small></div>
+    <div><span class="summary-label">Memory</span><strong id="ram-now">—</strong><small id="ram-detail">—</small></div>
+    <div><span class="summary-label">Available memory</span><strong id="available-now">—</strong><small id="cache-detail">Includes reclaimable cache</small></div>
+    <div><span class="summary-label">Swap</span><strong id="swap-now">—</strong><small id="swap-detail">—</small></div>
+  </section>
+  <section class="charts" aria-label="Performance over time">
+    <article class="card"><div class="card-heading"><div><h2>CPU activity</h2><p>Processing and time waiting for storage</p></div><span id="cpu-chart-value" class="chart-value">—</span></div><div id="chart-cpu" class="chart" tabindex="0" role="img" aria-label="CPU activity history. Use left and right arrows to inspect readings."></div><div class="legend"><span><i class="blue"></i>Active CPU</span><span><i class="amber"></i>Storage wait</span></div></article>
+    <article class="card"><div class="card-heading"><div><h2>Memory</h2><p>RAM and swap in use</p></div><span id="memory-chart-value" class="chart-value">—</span></div><div id="chart-memory" class="chart" tabindex="0" role="img" aria-label="Memory history. Use left and right arrows to inspect readings."></div><div class="legend"><span><i class="violet"></i>RAM</span><span><i class="amber"></i>Swap</span></div></article>
+    <article class="card"><div class="card-heading"><div><h2>Disk activity</h2><p>Combined physical disks</p></div><span id="disk-chart-value" class="chart-value">—</span></div><div id="chart-disk" class="chart" tabindex="0" role="img" aria-label="Disk throughput history. Use left and right arrows to inspect readings."></div><div class="legend"><span><i class="teal"></i>Read</span><span><i class="blue"></i>Write</span></div></article>
+    <article class="card"><div class="card-heading"><div><h2>Network traffic</h2><p>Received and sent across network interfaces</p></div><span id="network-chart-value" class="chart-value">—</span></div><div id="chart-network" class="chart" tabindex="0" role="img" aria-label="Network throughput history. Use left and right arrows to inspect readings."></div><div class="legend"><span><i class="blue"></i>Received</span><span><i class="teal"></i>Sent</span></div></article>
+  </section>
+  <div class="history-note"><span id="history-status">Loading recorded history…</span><span>Live readings every 5 seconds · graphs from PCP history</span></div>
+  <section class="card ram-card" aria-labelledby="ram-heading">
+    <div class="card-heading"><div><h2 id="ram-heading">Where RAM goes</h2><p>Inner ring: users · outer ring: processes · full circle: total RAM</p></div><span class="count">LIVE</span></div>
+    <div class="ram-layout">
+      <div id="ram-donut" class="ram-donut"><div class="empty">Waiting for live memory readings…</div></div>
+      <div class="ram-breakdown"><div class="eyebrow">MEMORY BY USER</div><div id="ram-users"></div></div>
+      <div class="ram-inspect"><div class="eyebrow">SEGMENT DETAILS</div><h3 id="ram-segment-name">Explore your RAM</h3><strong id="ram-segment-value">—</strong><p id="ram-segment-detail">Hover over a ring segment, or focus it with your keyboard.</p></div>
+    </div>
+    <p id="ram-accounting" class="ram-accounting">Free includes reclaimable cache. Process shares are estimates based on resident memory.</p>
+  </section>
+  <section class="card process-card">
+    <div class="process-heading"><div><h2>Resource consumers <span id="process-count" class="count"></span></h2><p>Live processes · click a column to sort</p></div><label><span class="sr-only">Filter processes by name, user or PID</span><input id="filter" type="search" placeholder="Search processes…"></label></div>
+    <div class="table-scroll"><table><thead><tr><th aria-sort="none"><button data-sort="name">Process <span></span></button></th><th aria-sort="none"><button data-sort="user">User <span></span></button></th><th aria-sort="none"><button data-sort="pid">PID <span></span></button></th><th class="number" aria-sort="none"><button data-sort="cpu">CPU <span></span></button></th><th class="number" aria-sort="descending"><button data-sort="ram">Memory <span>↓</span></button></th></tr></thead><tbody id="processes"><tr><td colspan="5" class="empty">Waiting for live processes…</td></tr></tbody></table></div>
+    <footer class="process-footer"><span id="rows-info">—</span><button id="show-all" hidden>Show all</button><span>CPU: 100% = one core · RAM includes shared pages</span></footer>
+  </section>
+</main>
+</body>
+</html>

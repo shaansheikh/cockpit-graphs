@@ -1,0 +1,28 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {partition}=require('./ram-model.js');
+const close=(a,b)=>assert.ok(Math.abs(a-b)<1e-8,`${a} != ${b}`);
+const processes=[{pid:1,name:'agent',user:'alice',ram:45},{pid:2,name:'browser',user:'alice',ram:15},{pid:3,name:'system',user:'root',ram:10}];
+const normal=partition({total:100,available:20},processes);
+close(normal.groups.reduce((sum,g)=>sum+g.value,0),100);
+assert.equal(normal.groups.find(g=>g.name==='alice').value,60);
+assert.equal(normal.groups.find(g=>g.kind==='system').value,10);
+assert.equal(normal.groups.find(g=>g.kind==='free').value,20);
+for(const group of normal.groups){
+  if(group.kind!=='user')continue;
+  close(group.processes.reduce((sum,p)=>sum+p.value,0),group.value);
+  close(group.processes[0].start,group.start);
+  close(group.processes.at(-1).end,group.end);
+}
+close(normal.groups.at(-1).end-normal.groups[0].start,2*Math.PI);
+const shared=partition({total:100,available:60},processes);
+close(shared.groups.reduce((sum,g)=>sum+g.value,0),100);
+close(shared.scale,40/70);
+assert.ok(shared.groups.every(g=>g.value>=0));
+assert.equal(shared.groups.find(g=>g.name==='alice').processes[0].rss,45);
+const empty=partition({total:100,available:100},[]);
+assert.equal(empty.groups.length,1);assert.equal(empty.groups[0].kind,'free');
+const unavailable=partition({total:100,available:0},[]);
+assert.equal(unavailable.groups.length,1);assert.equal(unavailable.groups[0].kind,'system');
+assert.equal(partition({total:0,available:0},[]).groups.length,0);
+console.log('PASS: donut totals, nested alignment, shared-memory scaling and empty cases');
