@@ -207,9 +207,19 @@ def swap_split(row):
     return tuple((size[k]-free[k])/size[k]*100 if size[k] else None for k in ('zram', 'disk'))
 
 
-def history(minutes):
-    end = dt.datetime.now()
-    start = end-dt.timedelta(minutes=minutes)
+PRESET_MINUTES = (30, 60, 360, 1440, 2880, 10080)
+MAX_SPAN = dt.timedelta(days=14)  # PCP keeps 14 days by default
+
+
+def history(minutes=None, start=None, end=None):
+    """Read PCP history for the last `minutes`, or for the explicit start..end window."""
+    if minutes is not None:
+        end = dt.datetime.now()
+        start = end-dt.timedelta(minutes=minutes)
+    if start is None or end is None or end <= start:
+        raise ValueError('The end time must be after the start time.')
+    if end-start > MAX_SPAN:
+        raise ValueError('Choose a range of 14 days or less.')
     directory = Path('/var/log/pcp/pmlogger') / os.uname().nodename
     archives = []
     # Include the preceding archive for rates at the beginning of the window.
@@ -218,10 +228,11 @@ def history(minutes):
             archives.append(str(index.with_suffix('')))
     if not archives:
         raise RuntimeError('No PCP archives are available for this time window.')
-    interval = max(60, minutes*60//360)
+    # About 360 points per window, in whole minutes.
+    interval = max(60, int((end-start).total_seconds()//360)//60*60)
     command = ['pmrep', '-a', ','.join(archives), '-S', start.strftime('%Y-%m-%d %H:%M:%S'),
                '-T', end.strftime('%Y-%m-%d %H:%M:%S'), '-t', str(interval), '-o', 'csv', '-B', 'byte', '-5'] + METRICS
-    result = subprocess.run(command, capture_output=True, text=True, timeout=40)
+    result = subprocess.run(command, capture_output=True, text=True, timeout=90)
     if result.returncode:
         raise RuntimeError('PCP history could not be read: '+result.stderr.strip()[:300])
     rows = []
@@ -258,13 +269,17 @@ if __name__ == '__main__':
     try:
         if len(sys.argv) == 3 and sys.argv[1] == 'history':
             minutes = int(sys.argv[2])
-            if minutes not in (30, 60, 360, 1440):
+            if minutes not in PRESET_MINUTES:
                 raise ValueError('Unsupported time range')
             print(json.dumps(history(minutes)))
+        elif len(sys.argv) == 4 and sys.argv[1] == 'history-range':
+            # Epoch milliseconds, so the browser's timezone never matters.
+            start, end = (dt.datetime.fromtimestamp(int(value)/1000) for value in sys.argv[2:4])
+            print(json.dumps(history(start=start, end=end)))
         elif sys.argv[1:] == ['live']:
             live()
         else:
-            raise ValueError('Expected live or history <minutes>')
+            raise ValueError('Expected live, history <minutes> or history-range <start-ms> <end-ms>')
     except (BrokenPipeError, KeyboardInterrupt):
         pass
     except Exception as exc:

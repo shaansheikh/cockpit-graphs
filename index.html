@@ -13,7 +13,8 @@
 <main>
   <header class="page-header">
     <div><div class="eyebrow">SYSTEM PERFORMANCE</div><h1>Pi monitor</h1><p class="subtitle">A clearer view of your Pi.</p></div>
-    <div class="controls"><span id="connection" class="status">Connecting…</span><label for="range" class="sr-only">Graph time range</label><select id="range"><option value="30">Last 30 minutes</option><option value="60" selected>Last hour</option><option value="360">Last 6 hours</option><option value="1440">Last 24 hours</option></select><button id="refresh" title="Reload recorded history">Refresh</button></div>
+    <div class="controls"><span id="connection" class="status">Connecting…</span><label for="range" class="sr-only">Graph time range</label><select id="range"><option value="30">Last 30 minutes</option><option value="60" selected>Last hour</option><option value="360">Last 6 hours</option><option value="1440">Last 24 hours</option><option value="2880">Last 2 days</option><option value="10080">Last 7 days</option><option value="custom">Custom range…</option></select><button id="refresh" title="Reload recorded history">Refresh</button></div>
+    <form id="custom-range" class="custom-range" hidden><label>From <input type="datetime-local" id="range-start" required></label><label>To <input type="datetime-local" id="range-end" required></label><button type="submit">Apply</button><span id="custom-error" class="custom-error" role="alert"></span></form>
   </header>
   <div id="error" role="status" hidden></div>
   <section class="summary" aria-label="Current system metrics">

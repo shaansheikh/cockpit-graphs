@@ -8,7 +8,7 @@
     disk: {series:[['diskRead','Read','#28b5a1'],['diskWrite','Write','#5085ef']]},
     network: {series:[['netIn','Received','#5085ef'],['netOut','Sent','#28b5a1']]}
   };
-  let historical = [], livePoints = [], rows = [], current = null, range = 60;
+  let historical = [], livePoints = [], rows = [], current = null, range = 60, custom = null;
   let sort = 'ram', descending = true, allRows = false, liveProcess = null, historyProcess = null, generation = 0;
   let historyError = '', liveError = '', pending = '', retry = null, lastRender = 0;
   const bytes = (n, rate=false) => {
@@ -18,18 +18,22 @@
     return `${n.toFixed(n>=100 || unit===0?0:1)} ${units[unit]}${rate?'/s':''}`;
   };
   const percent = n => Number.isFinite(n) ? `${n.toFixed(1)}%` : '—';
-  const timeLabel = n => new Date(n).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  const MAX_CUSTOM = 14*86400000;
+  // A preset follows "now"; a custom range is a fixed window.
+  const timeWindow = () => custom || {start:Date.now()-range*60000, end:Date.now()};
+  const timeLabel = (n, span=0) => new Date(n).toLocaleString([], span>26*3600000
+    ? {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'} : {hour:'2-digit',minute:'2-digit'});
   const pointTime = n => new Date(n).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const hidden = () => document.hidden || cockpit.hidden;
   function error(){ $('error').hidden=!(historyError||liveError); $('error').textContent=[historyError,liveError].filter(Boolean).join(' '); }
   function points(){
-    const cutoff=Date.now()-range*60000;
+    const {start:cutoff,end:limit}=timeWindow();
     const liveMinutes=new Set(livePoints.map(p=>Math.floor(p.time/60000)));
-    return [...historical.filter(p=>!liveMinutes.has(Math.floor(p.time/60000))),...livePoints].filter(p=>p.time>=cutoff).sort((a,b)=>a.time-b.time);
+    return [...historical.filter(p=>!liveMinutes.has(Math.floor(p.time/60000))),...livePoints].filter(p=>p.time>=cutoff&&p.time<=limit).sort((a,b)=>a.time-b.time);
   }
   function drawChart(id, data){
     const host=$(`chart-${id}`), spec=specs[id], w=Math.max(250,host.clientWidth), h=210;
-    const left=58,right=w-15,top=16,bottom=176,start=Date.now()-range*60000,end=Date.now();
+    const left=58,right=w-15,top=16,bottom=176,{start,end}=timeWindow(),span=end-start;
     const values=data.flatMap(p=>spec.series.map(s=>p[s[0]])).filter(Number.isFinite);
     const peak=spec.percent?100:Math.max(...values,1024)*1.18;
     const x=t=>left+(t-start)/(end-start)*(right-left), y=v=>bottom-v/peak*(bottom-top);
@@ -42,12 +46,12 @@
     }
     for(let i=0;i<=4;i++){
       const t=start+(end-start)*i/4;
-      svg+=`<text x="${x(t)}" y="201" text-anchor="${i===0?'start':i===4?'end':'middle'}">${timeLabel(t)}</text>`;
+      svg+=`<text x="${x(t)}" y="201" text-anchor="${i===0?'start':i===4?'end':'middle'}">${timeLabel(t,span)}</text>`;
     }
     spec.series.forEach((s,i)=>{
       let segments=[],segment=[],prior=null;
       for(const p of data){
-        const gap=prior && p.time-prior.time>Math.max(180000,range*60000/120);
+        const gap=prior && p.time-prior.time>Math.max(180000,span/120);
         if(!Number.isFinite(p[s[0]])||gap){if(segment.length)segments.push(segment);segment=[];}
         if(Number.isFinite(p[s[0]]))segment.push([x(p.time),y(p[s[0]])]);
         prior=p;
@@ -195,11 +199,11 @@
   function loadHistory(){
     const ticket=++generation;if(historyProcess)historyProcess.close();
     $('history-status').textContent='Loading recorded history…';$('refresh').disabled=true;historyError='';error();
-    historyProcess=cockpit.spawn(['python3',SCRIPT,'history',String(range)],{err:'message'});
+    historyProcess=cockpit.spawn(['python3',SCRIPT,...(custom?['history-range',String(Math.round(custom.start)),String(Math.round(custom.end))]:['history',String(range)])],{err:'message'});
     historyProcess.then(output=>{
       if(ticket!==generation)return;
       const result=JSON.parse(output);historical=result.points;
-      $('history-status').textContent=historical.length?`PCP history · ${result.interval}s resolution`:'No recorded history in this time range';renderCharts();
+      $('history-status').textContent=historical.length?`PCP history · ${result.interval>=120?Math.round(result.interval/60)+' min':result.interval+'s'} resolution`:'No recorded history in this time range';renderCharts();
     }).catch(exc=>{if(ticket!==generation)return;historyError=`History unavailable. ${exc.message||exc}`;error();$('history-status').textContent='Showing live readings only';renderCharts();}).finally(()=>{if(ticket===generation){$('refresh').disabled=false;historyProcess=null;}});
   }
   function startLive(){
@@ -217,7 +221,26 @@
     function finished(exc){if(liveProcess!==process)return;liveProcess=null;$('connection').textContent='Disconnected';$('connection').className='status';if(exc){liveError=`Live readings unavailable. ${exc.message||exc}`;error();}if(!hidden())retry=setTimeout(startLive,10000);}
   }
   function stopLive(){clearTimeout(retry);if(liveProcess){const process=liveProcess;liveProcess=null;process.close();}$('connection').textContent='Paused';$('connection').className='status';}
-  $('range').onchange=()=>{range=Number($('range').value);historical=[];renderCharts();loadHistory();};
+  const localInput = ms => { const d=new Date(ms-new Date(ms).getTimezoneOffset()*60000); return d.toISOString().slice(0,16); };
+  function showCustom(){
+    const now=Date.now();
+    $('custom-range').hidden=false;$('custom-error').textContent='';
+    $('range-start').max=$('range-end').max=localInput(now);$('range-start').min=$('range-end').min=localInput(now-MAX_CUSTOM);
+    if(!$('range-start').value||!$('range-end').value){$('range-start').value=localInput(custom?custom.start:now-86400000);$('range-end').value=localInput(custom?custom.end:now);}
+  }
+  $('range').onchange=()=>{
+    if($('range').value==='custom'){showCustom();return;}
+    custom=null;range=Number($('range').value);$('custom-range').hidden=true;historical=[];renderCharts();loadHistory();
+  };
+  $('custom-range').onsubmit=event=>{
+    event.preventDefault();
+    const start=new Date($('range-start').value).getTime(),end=new Date($('range-end').value).getTime(),fail=message=>{$('custom-error').textContent=message;};
+    if(!Number.isFinite(start)||!Number.isFinite(end))return fail('Enter both a start and an end time.');
+    if(end<=start)return fail('The end time must be after the start time.');
+    if(end-start>MAX_CUSTOM)return fail('Choose a range of 14 days or less.');
+    if(start>Date.now())return fail('The start time is in the future.');
+    $('custom-error').textContent='';custom={start,end};historical=[];renderCharts();loadHistory();
+  };
   $('refresh').onclick=loadHistory;$('filter').oninput=renderRows;$('show-all').onclick=()=>{allRows=!allRows;renderRows();};
   document.querySelectorAll('[data-sort]').forEach(button=>{button.onclick=()=>{if(sort===button.dataset.sort)descending=!descending;else{sort=button.dataset.sort;descending=['ram','cpu'].includes(sort);}renderRows();};});
   let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(renderCharts,100);});

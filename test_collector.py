@@ -1,5 +1,6 @@
 """Regression checks for PCP units, missing rate samples, and access boundaries."""
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime
@@ -116,6 +117,54 @@ class SwapHistoryTests(unittest.TestCase):
         self.assertIn('swapdev.free', args)
         self.assertEqual(point['zram'], 75)
         self.assertEqual(point['diskSwap'], 0)
+
+
+class RangeTests(unittest.TestCase):
+    def run_history(self, **kwargs):
+        headers = ['Time'] + collector.METRICS[:14] + ['kernel.all.load-1 minute', 'hinv.ncpu']
+        values = ['2026-10-07 02:00:00', '200', '200', '0', '0', '3600', '0',
+                  '4000000000', '100000000', '500000000', '0', '0', '0', '0', '0', '1', '4']
+        fake = subprocess.CompletedProcess([], 0, ','.join(headers)+'\n'+','.join(values)+'\n', '')
+        with patch.object(collector.Path, 'glob', return_value=[
+                collector.Path(f'/archive/202610{day:02d}.index') for day in (1, 2, 3, 9, 13, 14)]), \
+             patch.object(collector.subprocess, 'run', return_value=fake) as run:
+            result = collector.history(**kwargs)
+        return result, run.call_args.args[0]
+
+    def test_explicit_window_selects_archives_and_resolution(self):
+        start, end = datetime(2026, 10, 1, 6), datetime(2026, 10, 3, 6)
+        result, args = self.run_history(start=start, end=end)
+        self.assertEqual(args[args.index('-a')+1], '/archive/20261001,/archive/20261002,/archive/20261003')
+        self.assertEqual(args[args.index('-S')+1], '2026-10-01 06:00:00')
+        self.assertEqual(args[args.index('-T')+1], '2026-10-03 06:00:00')
+        self.assertEqual(result['interval'], 480)
+        self.assertEqual(args[args.index('-t')+1], '480')
+
+    def test_resolution_scales_with_window(self):
+        for days, interval in ((1, 240), (2, 480), (7, 1680), (14, 3360)):
+            end = datetime(2026, 10, 14)
+            _, args = self.run_history(start=end-collector.dt.timedelta(days=days), end=end)
+            self.assertEqual(args[args.index('-t')+1], str(interval), days)
+
+    def test_invalid_windows_are_rejected(self):
+        end = datetime(2026, 10, 14)
+        with self.assertRaisesRegex(ValueError, 'after the start'):
+            collector.history(start=end, end=end)
+        with self.assertRaisesRegex(ValueError, 'after the start'):
+            collector.history(start=end, end=end-collector.dt.timedelta(hours=1))
+        with self.assertRaisesRegex(ValueError, '14 days'):
+            collector.history(start=end-collector.dt.timedelta(days=15), end=end)
+        with self.assertRaisesRegex(ValueError, 'after the start'):
+            collector.history()
+
+    def test_new_presets_are_allowed(self):
+        self.assertIn(2880, collector.PRESET_MINUTES)
+        self.assertIn(10080, collector.PRESET_MINUTES)
+
+    def test_history_range_command_line(self):
+        out = subprocess.run([sys.executable, collector.__file__, 'history-range', '5', '1'], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn('after the start', out.stderr)
 
 
 if __name__ == '__main__':
