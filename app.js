@@ -4,7 +4,7 @@
   const SCRIPT = '/usr/local/share/cockpit/pi-monitor/collector.py';
   const specs = {
     cpu: {percent:true, series:[['cpu','Active CPU','#5085ef'],['wait','Storage wait','#e4a44a']]},
-    memory: {percent:true, series:[['memory','RAM','#9b7ce8'],['swap','Swap','#e4a44a']]},
+    memory: {percent:true, series:[['memory','RAM','#9b7ce8'],['zram','zram swap','#28b5a1'],['diskSwap','SD swap','#e4a44a']]},
     disk: {series:[['diskRead','Read','#28b5a1'],['diskWrite','Write','#5085ef']]},
     network: {series:[['netIn','Received','#5085ef'],['netOut','Sent','#28b5a1']]}
   };
@@ -91,6 +91,7 @@
     function color(group,index=null){
       if(group.kind==='free')return 'var(--ram-free)';
       if(group.kind==='system')return 'var(--ram-system)';
+      if(group.kind==='zram')return 'var(--ram-zram)';
       return `hsl(${hue(group.name)} 66% ${index===null?59:46+(index%6)*6}%)`;
     }
     function arc(start,end,inner,outer){
@@ -106,6 +107,7 @@
       $('ram-segment-detail').textContent=item.kind==='process'?`User: ${item.user}. Resident memory: ${bytes(item.rss)}.${model.scale<1?' Chart share is scaled to fit used RAM.':''}`:
         item.kind==='free'?'Memory available for applications, including reclaimable cache.':
         item.kind==='system'?'Used RAM not attributed to the listed processes, including kernel memory.':
+        item.kind==='zram'?'RAM holding compressed swapped-out pages. This is real, unreclaimable memory, but far smaller than the data it stores.':
         `${item.processes.length} processes. Their outer-ring segments align with this user’s share.`;
     }
     function select(item){
@@ -140,11 +142,24 @@
     else{ramSelection=null;$('ram-segment-name').textContent='Explore your RAM';$('ram-segment-value').textContent=bytes(model.used)+' in use';$('ram-segment-detail').textContent='Hover over a ring segment, or focus it with your keyboard.';}
     $('ram-accounting').textContent=`Free includes reclaimable cache. Process shares use RSS, which can count shared pages more than once.${model.scale<1?' Shares are proportionally scaled to fit used RAM.':' Remaining used RAM is shown as System / other.'}`;
   }
+  function renderSwap(m){
+    const detail=$('swap-detail'),pressure=m.diskSwap>64*1048576;
+    if(m.zramTotal){
+      $('swap-now').textContent=`${bytes(m.zramUsed)} in zram`;
+      const ratio=m.zramRam>0?` (${(m.zramUsed/m.zramRam).toFixed(1)}×)`:'';
+      detail.textContent=`${bytes(m.zramRam)} RAM${ratio}`+(m.diskSwapTotal?` · SD swap ${bytes(m.diskSwap)}`:'');
+    }else{
+      $('swap-now').textContent=bytes(m.swap);
+      detail.textContent=`${percent(m.swapTotal?m.swap/m.swapTotal*100:0)} of ${bytes(m.swapTotal)}`;
+    }
+    detail.classList.toggle('warn',pressure);
+    detail.title=pressure?'Disk-backed swap is in use. This is slow and usually means real memory pressure.':'';
+  }
   function renderSummary(p){
     $('cpu-now').textContent=percent(p.cpu);$('load-now').textContent=`Load ${p.load.toFixed(1)} · ${p.cores} cores · ${percent(p.wait)} storage wait`;
     $('ram-now').textContent=bytes(p.mem.used);$('ram-detail').textContent=`${percent(p.memory)} of ${bytes(p.mem.total)}`;
     $('available-now').textContent=bytes(p.mem.available);$('cache-detail').textContent=`${bytes(p.mem.cache)} buffers / cache`;
-    $('swap-now').textContent=bytes(p.mem.swap);$('swap-detail').textContent=`${percent(p.swap)} of ${bytes(p.mem.swapTotal)}`;
+    renderSwap(p.mem);
     $('cpu-chart-value').textContent=percent(p.cpu);$('memory-chart-value').textContent=percent(p.memory);
     $('disk-chart-value').textContent=bytes(p.diskRead+p.diskWrite,true);$('network-chart-value').textContent=bytes(p.netIn+p.netOut,true);
   }

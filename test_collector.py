@@ -1,5 +1,6 @@
 """Regression checks for PCP units, missing rate samples, and access boundaries."""
 import subprocess
+import tempfile
 import unittest
 from datetime import datetime
 from unittest.mock import patch
@@ -50,6 +51,35 @@ class HistoryTests(unittest.TestCase):
         self.assertTrue(rows)
         self.assertTrue(all(set(row) == {'pid', 'name', 'user', 'ram', 'cpu', 'state'} for row in rows))
         self.assertTrue(all(row['cpu'] is None for row in rows))
+
+class SwapTests(unittest.TestCase):
+    def test_zram_and_disk_swap_are_reported_separately(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = collector.Path(tmp)
+            swaps = root/'swaps'
+            swaps.write_text('Filename\tType\tSize\tUsed\tPriority\n'
+                             '/dev/zram0\tpartition\t1572864\t400000\t100\n'
+                             '/var/swap\tfile\t524288\t2048\t-2\n')
+            (root/'zram0').mkdir()
+            (root/'zram0'/'mm_stat').write_text('409600000 108000000 112000000 0 112000000 46 0 93 93\n')
+            result = collector.zram_usage(str(swaps), str(root))
+        self.assertEqual(result, dict(zramUsed=400000*1024, zramTotal=1572864*1024, zramRam=112000000,
+                                      diskSwap=2048*1024, diskSwapTotal=524288*1024))
+
+    def test_no_zram_or_unreadable_swaps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = collector.Path(tmp)
+            (root/'swaps').write_text('Filename\tType\tSize\tUsed\tPriority\n/var/swap\tfile\t524288\t100\t-2\n')
+            result = collector.zram_usage(str(root/'swaps'), str(root))
+            self.assertEqual((result['zramTotal'], result['zramRam']), (0, 0))
+            self.assertEqual(result['diskSwap'], 100*1024)
+            missing = collector.zram_usage(str(root/'absent'), str(root))
+        self.assertEqual(missing['diskSwapTotal'], 0)
+
+    def test_memory_exposes_split_fields(self):
+        mem = collector.memory()
+        for key in ('swap', 'swapTotal', 'zramUsed', 'zramTotal', 'zramRam', 'diskSwap', 'diskSwapTotal'):
+            self.assertIn(key, mem)
 
 
 if __name__ == '__main__':

@@ -32,9 +32,43 @@ def memory():
         values[key] = int(value.split()[0]) * 1024
     total = values['MemTotal']
     available = values.get('MemAvailable', values['MemFree'])
+    zram = zram_usage()
     return dict(total=total, available=available, used=total-available,
                 cache=values['Cached']+values['Buffers'], free=values['MemFree'],
-                swap=values['SwapTotal']-values['SwapFree'], swapTotal=values['SwapTotal'])
+                swap=values['SwapTotal']-values['SwapFree'], swapTotal=values['SwapTotal'],
+                **zram)
+
+
+def zram_usage(swaps_path='/proc/swaps', sys_block='/sys/block'):
+    """Split swap into zram (compressed RAM) and disk-backed swap.
+
+    zram is cheap and expected to fill up; use of a disk swap file or partition
+    (here, the SD card) is what signals real memory pressure.
+    """
+    zram_used = zram_size = disk_used = disk_size = 0
+    zram_ram = 0
+    try:
+        lines = Path(swaps_path).read_text().splitlines()[1:]
+    except OSError:
+        lines = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        name, size, used = fields[0], int(fields[2])*1024, int(fields[3])*1024
+        if name.startswith('/dev/zram'):
+            zram_size += size
+            zram_used += used
+            try:
+                stat = Path(sys_block, name.rsplit('/', 1)[1], 'mm_stat').read_text().split()
+                zram_ram += int(stat[2])
+            except (OSError, ValueError, IndexError):
+                pass
+        else:
+            disk_size += size
+            disk_used += used
+    return dict(zramUsed=zram_used, zramTotal=zram_size, zramRam=zram_ram,
+                diskSwap=disk_used, diskSwapTotal=disk_size)
 
 
 def counters():
@@ -125,6 +159,8 @@ def live():
         data = dict(time=time.time()*1000, cpu=(total-delta[3]-delta[4])/total*100,
                     wait=delta[4]/total*100, memory=mem['used']/mem['total']*100,
                     swap=mem['swap']/mem['swapTotal']*100 if mem['swapTotal'] else 0,
+                    zram=mem['zramUsed']/mem['zramTotal']*100 if mem['zramTotal'] else None,
+                    diskSwap=mem['diskSwap']/mem['diskSwapTotal']*100 if mem['diskSwapTotal'] else None,
                     diskRead=max(0,new[1][0]-old[1][0])/elapsed,
                     diskWrite=max(0,new[1][1]-old[1][1])/elapsed,
                     netIn=max(0,new[2][0]-old[2][0])/elapsed,

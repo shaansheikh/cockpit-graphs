@@ -18,7 +18,9 @@
     const groups=[...users.values()].filter(g=>g.value>0).sort((a,b)=>b.value-a.value||a.name.localeCompare(b.name));
     for(const group of groups)group.processes.sort((a,b)=>b.value-a.value||a.pid-b.pid);
     const other=Math.max(0,used-resident*scale);
-    if(other>0)groups.push({key:'system',name:'System / other',value:other,kind:'system',processes:[]});
+    const zram=Math.min(other,Math.max(0,mem.zramRam||0));
+    if(other-zram>0)groups.push({key:'system',name:'System / other',value:other-zram,kind:'system',processes:[]});
+    if(zram>0)groups.push({key:'zram',name:'zram (compressed swap)',value:zram,kind:'zram',processes:[]});
     if(free>0)groups.push({key:'free',name:'Free',value:free,kind:'free',processes:[]});
     let angle=-Math.PI/2;
     for(const group of groups) {

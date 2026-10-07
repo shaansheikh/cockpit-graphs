@@ -1,6 +1,6 @@
 # Cockpit graphs
 
-A dependency-free Cockpit page with clean CPU, RAM/swap, disk and network time-series charts and a searchable, sortable process table.
+A dependency-free Cockpit page with clean CPU, RAM/zram/SD-swap, disk and network time-series charts and a searchable, sortable process table.
 
 The page appears as **Pi monitor** in Cockpit. It runs on Linux and is designed to keep overhead low on a Raspberry Pi.
 
@@ -26,7 +26,7 @@ Historical graphs use existing PCP archives at `/var/log/pcp/pmlogger/<hostname>
 
 Live readings and processes are read from `/proc` every 5 seconds. The small Python collector runs only while the page is visible, under the logged-in account's existing permissions; no separate service or elevated privileges are required. It stops when switching Cockpit pages or leaving the browser tab. History is not extended on disk by this page; PCP continues its existing recording independently. Process CPU is measured over the last sample interval (100% is one core), not lifetime average.
 
-RAM usage is total minus available, including reclaimable cache in the available figure. Process RAM is RSS and includes shared pages. CPU processing and storage wait are shown separately. Disk activity sums whole physical disks; network uses PCP's configured interface exclusions. Network rates are bytes/sec. Missing historical samples create gaps. Archive and live collection errors are shown independently, so live readings remain usable if history fails.
+RAM usage is total minus available, including reclaimable cache in the available figure. Swap is split by backing device using `/proc/swaps`: **zram** (compressed RAM) and **disk swap** (a swap file or partition, here on the SD card). The Swap card shows how much data zram stores, the RAM it actually costs (from `/sys/block/zram*/mm_stat`) and the compression ratio, and turns amber when disk swap exceeds 64 MiB, since disk swap, unlike zram, signals real memory pressure and slows the Pi. The memory chart plots RAM, zram fill and disk-swap fill as percentages of each device's size. The donut shows compressed zram as its own slice instead of hiding it in System / other. Without zram the Swap card falls back to a single used/total figure. PCP history only records combined swap, so the zram and SD-swap lines have gaps for times before this version collected them. Process RAM is RSS and includes shared pages. CPU processing and storage wait are shown separately. Disk activity sums whole physical disks; network uses PCP's configured interface exclusions. Network rates are bytes/sec. Missing historical samples create gaps. Archive and live collection errors are shown independently, so live readings remain usable if history fails.
 
 Home Assistant's Python process is displayed as `homeassistant` in the table and donut. The collector checks Python's module argument locally to recognize it, without sending command arguments to the browser. This label follows process restarts and does not rename or restart the actual service.
 
