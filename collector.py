@@ -177,7 +177,34 @@ METRICS = [
     'mem.physmem', 'mem.util.available', 'mem.util.swapTotal', 'mem.util.swapFree',
     'disk.all.read_bytes', 'disk.all.write_bytes',
     'network.all.in.bytes', 'network.all.out.bytes', 'kernel.all.load', 'hinv.ncpu',
+    # Per-device swap; pmrep emits one "metric-/dev/zram0" style column per device.
+    'swapdev.length', 'swapdev.free',
 ]
+
+
+def swap_split(row):
+    """Return (zram %, disk-swap %) from pmrep's per-device swapdev columns.
+
+    Devices that did not exist at a sample are blank; None means no such device.
+    """
+    def number(value):
+        try:
+            return float(value) if value not in (None, '', 'N/A', '?') else None
+        except ValueError:
+            return None
+    size = {'zram': 0.0, 'disk': 0.0}
+    free = {'zram': 0.0, 'disk': 0.0}
+    for key, value in row.items():
+        if not key or not key.startswith('swapdev.length-'):
+            continue
+        device = key[len('swapdev.length-'):]
+        length, spare = number(value), number(row.get('swapdev.free-'+device))
+        if not length or spare is None:
+            continue
+        kind = 'zram' if device.startswith('/dev/zram') else 'disk'
+        size[kind] += length
+        free[kind] += spare
+    return tuple((size[k]-free[k])/size[k]*100 if size[k] else None for k in ('zram', 'disk'))
 
 
 def history(minutes):
@@ -210,6 +237,7 @@ def history(minutes):
                 continue
             total = sum(cpu) if all(v is not None for v in cpu) else 0
             swap_total, swap_free = number('mem.util.swapTotal'), number('mem.util.swapFree')
+            zram_percent, disk_percent = swap_split(row)
             def byte_rate(key):
                 value = number(key)
                 return value
@@ -217,6 +245,7 @@ def history(minutes):
                              wait=cpu[4]/total*100 if total else None,
                              memory=(physical-available)/physical*100,
                              swap=(swap_total-swap_free)/swap_total*100 if swap_total and swap_free is not None else 0,
+                             zram=zram_percent, diskSwap=disk_percent,
                              diskRead=byte_rate('disk.all.read_bytes'), diskWrite=byte_rate('disk.all.write_bytes'),
                              netIn=byte_rate('network.all.in.bytes'), netOut=byte_rate('network.all.out.bytes'),
                              load=number('kernel.all.load-1 minute')))

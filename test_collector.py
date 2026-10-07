@@ -82,5 +82,41 @@ class SwapTests(unittest.TestCase):
             self.assertIn(key, mem)
 
 
+class SwapHistoryTests(unittest.TestCase):
+    def test_swap_split_from_per_device_columns(self):
+        row = {'swapdev.length-/var/swap': '536870912', 'swapdev.free-/var/swap': '536870912',
+               'swapdev.length-/dev/zram0': '1073741824', 'swapdev.free-/dev/zram0': '536870912',
+               'swapdev.length-/dev/zram1': '1073741824', 'swapdev.free-/dev/zram1': '1073741824'}
+        zram, disk = collector.swap_split(row)
+        self.assertEqual(zram, 25)
+        self.assertEqual(disk, 0)
+
+    def test_swap_split_before_zram_existed(self):
+        row = {'swapdev.length-/var/swap': '1000', 'swapdev.free-/var/swap': '0',
+               'swapdev.length-/dev/zram0': '', 'swapdev.free-/dev/zram0': ''}
+        self.assertEqual(collector.swap_split(row), (None, 100))
+        self.assertEqual(collector.swap_split({}), (None, None))
+
+    def test_history_points_carry_zram_and_disk_swap(self):
+        extra = ['swapdev.length-/var/swap', 'swapdev.length-/dev/zram0', 'swapdev.free-/var/swap', 'swapdev.free-/dev/zram0']
+        headers = ['Time'] + collector.METRICS[:14] + ['kernel.all.load-1 minute', 'hinv.ncpu'] + extra
+        values = ['2026-10-07 02:00:00', '200', '200', '0', '0', '3600', '0',
+                  '4000000000', '100000000', '500000000', '0',
+                  '0', '0', '0', '0', '1', '4', '536870912', '1073741824', '536870912', '268435456']
+        output = ','.join(headers)+'\n'+','.join(values)+'\n'
+        fake = subprocess.CompletedProcess([], 0, output, '')
+        with patch.object(collector.Path, 'glob', return_value=[collector.Path('/archive/20990101.index')]), \
+             patch.object(collector.dt, 'datetime') as clock, \
+             patch.object(collector.subprocess, 'run', return_value=fake) as run:
+            clock.now.return_value = datetime(2099, 1, 1, 1)
+            clock.fromisoformat.side_effect = datetime.fromisoformat
+            point = collector.history(60)['points'][0]
+        args = run.call_args.args[0]
+        self.assertIn('swapdev.length', args)
+        self.assertIn('swapdev.free', args)
+        self.assertEqual(point['zram'], 75)
+        self.assertEqual(point['diskSwap'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()
