@@ -85,13 +85,20 @@
     const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');
     svg.setAttribute('viewBox','0 0 320 320');svg.setAttribute('role','group');
     svg.setAttribute('aria-label',`RAM usage: ${bytes(model.total)} total. Inner ring groups users, outer ring shows processes.`);
+    const defs=document.createElementNS(ns,'defs'),hatch=document.createElementNS(ns,'pattern');
+    hatch.setAttribute('id','zram-hatch');hatch.setAttribute('width','6');hatch.setAttribute('height','6');
+    hatch.setAttribute('patternUnits','userSpaceOnUse');hatch.setAttribute('patternTransform','rotate(45)');
+    const hatchBase=document.createElementNS(ns,'rect'),hatchLine=document.createElementNS(ns,'rect');
+    hatchBase.setAttribute('width','6');hatchBase.setAttribute('height','6');hatchBase.style.fill='var(--ram-zram-base)';
+    hatchLine.setAttribute('width','3');hatchLine.setAttribute('height','6');hatchLine.style.fill='var(--ram-zram)';
+    hatch.append(hatchBase,hatchLine);defs.append(hatch);svg.append(defs);
     const elements=[];
     const hues={pi:219,scuttle:260,root:167,jellyfin:32};
     function hue(name){let hash=0;for(const c of name)hash=(hash*31+c.charCodeAt(0))>>>0;return hues[name]??hash%360;}
     function color(group,index=null){
       if(group.kind==='free')return 'var(--ram-free)';
       if(group.kind==='system')return 'var(--ram-system)';
-      if(group.kind==='zram')return 'var(--ram-zram)';
+      if(group.kind==='zram')return 'url(#zram-hatch)';
       return `hsl(${hue(group.name)} 66% ${index===null?59:46+(index%6)*6}%)`;
     }
     function arc(start,end,inner,outer){
@@ -128,7 +135,7 @@
       if(group.processes.length)group.processes.forEach((item,i)=>segment(item,group,116,148,color(group,i)));
       else segment(group,group,116,148,fill);
       const line=document.createElement('button');line.className='ram-user';line.type='button';
-      const dot=document.createElement('i');dot.style.background=fill;
+      const dot=document.createElement('i');dot.style.background=group.kind==='zram'?'var(--ram-zram)':fill;
       const name=document.createElement('span');name.className='ram-user-name';name.textContent=group.name;
       const amount=document.createElement('span');amount.textContent=bytes(group.value);
       const share=document.createElement('small');share.textContent=percent(group.value/model.total*100);
