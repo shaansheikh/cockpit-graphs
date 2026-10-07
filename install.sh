@@ -21,4 +21,8 @@ for file in manifest.json index.html style.css app.js ram-model.js collector.py;
     install -m 644 "$source_dir/$file" "$target_dir/$file"
 done
 
+# Cockpit and browsers cache package files hard; a new version in the asset URLs
+# makes every browser fetch the files that were just installed.
+sed -i "s/@VERSION@/$(date +%s)/g" "$target_dir/index.html"
+
 echo "Installed Pi monitor. Refresh Cockpit, then select Pi monitor in the sidebar."

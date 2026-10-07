@@ -76,11 +76,32 @@
       cursor.setAttribute('x1',xx);cursor.setAttribute('x2',xx);cursor.setAttribute('y1',top);cursor.setAttribute('y2',bottom);cursor.setAttribute('visibility','visible');
       host.setAttribute('aria-label',`${id} at ${pointTime(p.time)}: ${spec.series.map(s=>`${s[1]} ${spec.percent?percent(p[s[0]]):bytes(p[s[0]],true)}`).join(', ')}`);
     }
-    host.onpointermove=event=>{const xx=event.clientX-host.getBoundingClientRect().left,t=start+(xx-left)/(right-left)*(end-start);let index=0;for(let i=1;i<data.length;i++)if(Math.abs(data[i].time-t)<Math.abs(data[index].time-t))index=i;inspect(index);};
-    host.onpointerleave=()=>{tooltip.hidden=true;cursor.setAttribute('visibility','hidden');};
+    const nearest=t=>{let index=0;for(let i=1;i<data.length;i++)if(Math.abs(data[i].time-t)<Math.abs(data[index].time-t))index=i;return index;};
+    function scrub(event){
+      const xx=event.clientX-host.getBoundingClientRect().left,index=nearest(start+(xx-left)/(right-left)*(end-start));
+      inspect(index);
+      if(event.pointerType==='touch'&&data.length)pinned[id]=data[index].time;
+    }
+    function hide(){tooltip.hidden=true;cursor.setAttribute('visibility','hidden');}
+    // Touch: keep receiving moves while the finger sweeps, and leave the readout up after lifting.
+    host.onpointerdown=event=>{if(event.pointerType==='touch'){try{host.setPointerCapture(event.pointerId);}catch(exc){}}scrub(event);};
+    host.onpointermove=scrub;
+    host.onpointerleave=event=>{if(event&&event.pointerType==='touch')return;hide();};
+    // Live samples redraw the chart every few seconds; restore a touch readout afterwards.
+    if(pinned[id]!==undefined&&data.length)inspect(nearest(pinned[id]));
     host.onkeydown=event=>{if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();inspect(selected+(event.key==='ArrowRight'?1:-1));}};
-    host.onblur=host.onpointerleave;
+    host.onblur=hide;
   }
+  // Touch readouts stay up until the next tap, so remember them per chart across redraws.
+  const pinned = {};
+  document.addEventListener('pointerdown',event=>{
+    for(const host of document.querySelectorAll('.chart')){
+      if(host.contains(event.target))continue;
+      delete pinned[host.id.replace('chart-','')];
+      const tip=host.querySelector('.tooltip'),line=host.querySelector('.cursor');
+      if(tip)tip.hidden=true;if(line)line.setAttribute('visibility','hidden');
+    }
+  });
   function renderCharts(){const data=points();for(const id of Object.keys(specs))drawChart(id,data);lastRender=Date.now();}
   let ramSelection=null;
   function renderRamDonut(p){
@@ -197,6 +218,7 @@
     document.querySelectorAll('[data-sort]').forEach(button=>{const active=button.dataset.sort===sort;button.querySelector('span').textContent=active?(descending?'↓':'↑'):'';button.parentElement.setAttribute('aria-sort',active?(descending?'descending':'ascending'):'none');});
   }
   function loadHistory(){
+    if(!custom&&!Number.isFinite(range))return;
     const ticket=++generation;if(historyProcess)historyProcess.close();
     $('history-status').textContent='Loading recorded history…';$('refresh').disabled=true;historyError='';error();
     historyProcess=cockpit.spawn(['python3',SCRIPT,...(custom?['history-range',String(Math.round(custom.start)),String(Math.round(custom.end))]:['history',String(range)])],{err:'message'});
