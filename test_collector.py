@@ -1,5 +1,7 @@
 """Regression checks for PCP units, missing rate samples, and access boundaries."""
 import subprocess
+import sys
+import tempfile
 import unittest
 from datetime import datetime
 from unittest.mock import patch
@@ -50,6 +52,119 @@ class HistoryTests(unittest.TestCase):
         self.assertTrue(rows)
         self.assertTrue(all(set(row) == {'pid', 'name', 'user', 'ram', 'cpu', 'state'} for row in rows))
         self.assertTrue(all(row['cpu'] is None for row in rows))
+
+class SwapTests(unittest.TestCase):
+    def test_zram_and_disk_swap_are_reported_separately(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = collector.Path(tmp)
+            swaps = root/'swaps'
+            swaps.write_text('Filename\tType\tSize\tUsed\tPriority\n'
+                             '/dev/zram0\tpartition\t1572864\t400000\t100\n'
+                             '/var/swap\tfile\t524288\t2048\t-2\n')
+            (root/'zram0').mkdir()
+            (root/'zram0'/'mm_stat').write_text('409600000 108000000 112000000 0 112000000 46 0 93 93\n')
+            result = collector.zram_usage(str(swaps), str(root))
+        self.assertEqual(result, dict(zramUsed=400000*1024, zramTotal=1572864*1024, zramRam=112000000,
+                                      diskSwap=2048*1024, diskSwapTotal=524288*1024))
+
+    def test_no_zram_or_unreadable_swaps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = collector.Path(tmp)
+            (root/'swaps').write_text('Filename\tType\tSize\tUsed\tPriority\n/var/swap\tfile\t524288\t100\t-2\n')
+            result = collector.zram_usage(str(root/'swaps'), str(root))
+            self.assertEqual((result['zramTotal'], result['zramRam']), (0, 0))
+            self.assertEqual(result['diskSwap'], 100*1024)
+            missing = collector.zram_usage(str(root/'absent'), str(root))
+        self.assertEqual(missing['diskSwapTotal'], 0)
+
+    def test_memory_exposes_split_fields(self):
+        mem = collector.memory()
+        for key in ('swap', 'swapTotal', 'zramUsed', 'zramTotal', 'zramRam', 'diskSwap', 'diskSwapTotal'):
+            self.assertIn(key, mem)
+
+
+class SwapHistoryTests(unittest.TestCase):
+    def test_swap_split_from_per_device_columns(self):
+        row = {'swapdev.length-/var/swap': '536870912', 'swapdev.free-/var/swap': '536870912',
+               'swapdev.length-/dev/zram0': '1073741824', 'swapdev.free-/dev/zram0': '536870912',
+               'swapdev.length-/dev/zram1': '1073741824', 'swapdev.free-/dev/zram1': '1073741824'}
+        zram, disk = collector.swap_split(row)
+        self.assertEqual(zram, 25)
+        self.assertEqual(disk, 0)
+
+    def test_swap_split_before_zram_existed(self):
+        row = {'swapdev.length-/var/swap': '1000', 'swapdev.free-/var/swap': '0',
+               'swapdev.length-/dev/zram0': '', 'swapdev.free-/dev/zram0': ''}
+        self.assertEqual(collector.swap_split(row), (None, 100))
+        self.assertEqual(collector.swap_split({}), (None, None))
+
+    def test_history_points_carry_zram_and_disk_swap(self):
+        extra = ['swapdev.length-/var/swap', 'swapdev.length-/dev/zram0', 'swapdev.free-/var/swap', 'swapdev.free-/dev/zram0']
+        headers = ['Time'] + collector.METRICS[:14] + ['kernel.all.load-1 minute', 'hinv.ncpu'] + extra
+        values = ['2026-10-07 02:00:00', '200', '200', '0', '0', '3600', '0',
+                  '4000000000', '100000000', '500000000', '0',
+                  '0', '0', '0', '0', '1', '4', '536870912', '1073741824', '536870912', '268435456']
+        output = ','.join(headers)+'\n'+','.join(values)+'\n'
+        fake = subprocess.CompletedProcess([], 0, output, '')
+        with patch.object(collector.Path, 'glob', return_value=[collector.Path('/archive/20990101.index')]), \
+             patch.object(collector.dt, 'datetime') as clock, \
+             patch.object(collector.subprocess, 'run', return_value=fake) as run:
+            clock.now.return_value = datetime(2099, 1, 1, 1)
+            clock.fromisoformat.side_effect = datetime.fromisoformat
+            point = collector.history(60)['points'][0]
+        args = run.call_args.args[0]
+        self.assertIn('swapdev.length', args)
+        self.assertIn('swapdev.free', args)
+        self.assertEqual(point['zram'], 75)
+        self.assertEqual(point['diskSwap'], 0)
+
+
+class RangeTests(unittest.TestCase):
+    def run_history(self, **kwargs):
+        headers = ['Time'] + collector.METRICS[:14] + ['kernel.all.load-1 minute', 'hinv.ncpu']
+        values = ['2026-10-07 02:00:00', '200', '200', '0', '0', '3600', '0',
+                  '4000000000', '100000000', '500000000', '0', '0', '0', '0', '0', '1', '4']
+        fake = subprocess.CompletedProcess([], 0, ','.join(headers)+'\n'+','.join(values)+'\n', '')
+        with patch.object(collector.Path, 'glob', return_value=[
+                collector.Path(f'/archive/202610{day:02d}.index') for day in (1, 2, 3, 9, 13, 14)]), \
+             patch.object(collector.subprocess, 'run', return_value=fake) as run:
+            result = collector.history(**kwargs)
+        return result, run.call_args.args[0]
+
+    def test_explicit_window_selects_archives_and_resolution(self):
+        start, end = datetime(2026, 10, 1, 6), datetime(2026, 10, 3, 6)
+        result, args = self.run_history(start=start, end=end)
+        self.assertEqual(args[args.index('-a')+1], '/archive/20261001,/archive/20261002,/archive/20261003')
+        self.assertEqual(args[args.index('-S')+1], '2026-10-01 06:00:00')
+        self.assertEqual(args[args.index('-T')+1], '2026-10-03 06:00:00')
+        self.assertEqual(result['interval'], 480)
+        self.assertEqual(args[args.index('-t')+1], '480')
+
+    def test_resolution_scales_with_window(self):
+        for days, interval in ((1, 240), (2, 480), (7, 1680), (14, 3360)):
+            end = datetime(2026, 10, 14)
+            _, args = self.run_history(start=end-collector.dt.timedelta(days=days), end=end)
+            self.assertEqual(args[args.index('-t')+1], str(interval), days)
+
+    def test_invalid_windows_are_rejected(self):
+        end = datetime(2026, 10, 14)
+        with self.assertRaisesRegex(ValueError, 'after the start'):
+            collector.history(start=end, end=end)
+        with self.assertRaisesRegex(ValueError, 'after the start'):
+            collector.history(start=end, end=end-collector.dt.timedelta(hours=1))
+        with self.assertRaisesRegex(ValueError, '14 days'):
+            collector.history(start=end-collector.dt.timedelta(days=15), end=end)
+        with self.assertRaisesRegex(ValueError, 'after the start'):
+            collector.history()
+
+    def test_new_presets_are_allowed(self):
+        self.assertIn(2880, collector.PRESET_MINUTES)
+        self.assertIn(10080, collector.PRESET_MINUTES)
+
+    def test_history_range_command_line(self):
+        out = subprocess.run([sys.executable, collector.__file__, 'history-range', '5', '1'], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn('after the start', out.stderr)
 
 
 if __name__ == '__main__':

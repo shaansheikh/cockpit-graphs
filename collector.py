@@ -32,9 +32,43 @@ def memory():
         values[key] = int(value.split()[0]) * 1024
     total = values['MemTotal']
     available = values.get('MemAvailable', values['MemFree'])
+    zram = zram_usage()
     return dict(total=total, available=available, used=total-available,
                 cache=values['Cached']+values['Buffers'], free=values['MemFree'],
-                swap=values['SwapTotal']-values['SwapFree'], swapTotal=values['SwapTotal'])
+                swap=values['SwapTotal']-values['SwapFree'], swapTotal=values['SwapTotal'],
+                **zram)
+
+
+def zram_usage(swaps_path='/proc/swaps', sys_block='/sys/block'):
+    """Split swap into zram (compressed RAM) and disk-backed swap.
+
+    zram is cheap and expected to fill up; use of a disk swap file or partition
+    (here, the SD card) is what signals real memory pressure.
+    """
+    zram_used = zram_size = disk_used = disk_size = 0
+    zram_ram = 0
+    try:
+        lines = Path(swaps_path).read_text().splitlines()[1:]
+    except OSError:
+        lines = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        name, size, used = fields[0], int(fields[2])*1024, int(fields[3])*1024
+        if name.startswith('/dev/zram'):
+            zram_size += size
+            zram_used += used
+            try:
+                stat = Path(sys_block, name.rsplit('/', 1)[1], 'mm_stat').read_text().split()
+                zram_ram += int(stat[2])
+            except (OSError, ValueError, IndexError):
+                pass
+        else:
+            disk_size += size
+            disk_used += used
+    return dict(zramUsed=zram_used, zramTotal=zram_size, zramRam=zram_ram,
+                diskSwap=disk_used, diskSwapTotal=disk_size)
 
 
 def counters():
@@ -125,6 +159,8 @@ def live():
         data = dict(time=time.time()*1000, cpu=(total-delta[3]-delta[4])/total*100,
                     wait=delta[4]/total*100, memory=mem['used']/mem['total']*100,
                     swap=mem['swap']/mem['swapTotal']*100 if mem['swapTotal'] else 0,
+                    zram=mem['zramUsed']/mem['zramTotal']*100 if mem['zramTotal'] else None,
+                    diskSwap=mem['diskSwap']/mem['diskSwapTotal']*100 if mem['diskSwapTotal'] else None,
                     diskRead=max(0,new[1][0]-old[1][0])/elapsed,
                     diskWrite=max(0,new[1][1]-old[1][1])/elapsed,
                     netIn=max(0,new[2][0]-old[2][0])/elapsed,
@@ -141,12 +177,49 @@ METRICS = [
     'mem.physmem', 'mem.util.available', 'mem.util.swapTotal', 'mem.util.swapFree',
     'disk.all.read_bytes', 'disk.all.write_bytes',
     'network.all.in.bytes', 'network.all.out.bytes', 'kernel.all.load', 'hinv.ncpu',
+    # Per-device swap; pmrep emits one "metric-/dev/zram0" style column per device.
+    'swapdev.length', 'swapdev.free',
 ]
 
 
-def history(minutes):
-    end = dt.datetime.now()
-    start = end-dt.timedelta(minutes=minutes)
+def swap_split(row):
+    """Return (zram %, disk-swap %) from pmrep's per-device swapdev columns.
+
+    Devices that did not exist at a sample are blank; None means no such device.
+    """
+    def number(value):
+        try:
+            return float(value) if value not in (None, '', 'N/A', '?') else None
+        except ValueError:
+            return None
+    size = {'zram': 0.0, 'disk': 0.0}
+    free = {'zram': 0.0, 'disk': 0.0}
+    for key, value in row.items():
+        if not key or not key.startswith('swapdev.length-'):
+            continue
+        device = key[len('swapdev.length-'):]
+        length, spare = number(value), number(row.get('swapdev.free-'+device))
+        if not length or spare is None:
+            continue
+        kind = 'zram' if device.startswith('/dev/zram') else 'disk'
+        size[kind] += length
+        free[kind] += spare
+    return tuple((size[k]-free[k])/size[k]*100 if size[k] else None for k in ('zram', 'disk'))
+
+
+PRESET_MINUTES = (30, 60, 360, 1440, 2880, 10080)
+MAX_SPAN = dt.timedelta(days=14)  # PCP keeps 14 days by default
+
+
+def history(minutes=None, start=None, end=None):
+    """Read PCP history for the last `minutes`, or for the explicit start..end window."""
+    if minutes is not None:
+        end = dt.datetime.now()
+        start = end-dt.timedelta(minutes=minutes)
+    if start is None or end is None or end <= start:
+        raise ValueError('The end time must be after the start time.')
+    if end-start > MAX_SPAN:
+        raise ValueError('Choose a range of 14 days or less.')
     directory = Path('/var/log/pcp/pmlogger') / os.uname().nodename
     archives = []
     # Include the preceding archive for rates at the beginning of the window.
@@ -155,10 +228,11 @@ def history(minutes):
             archives.append(str(index.with_suffix('')))
     if not archives:
         raise RuntimeError('No PCP archives are available for this time window.')
-    interval = max(60, minutes*60//360)
+    # About 360 points per window, in whole minutes.
+    interval = max(60, int((end-start).total_seconds()//360)//60*60)
     command = ['pmrep', '-a', ','.join(archives), '-S', start.strftime('%Y-%m-%d %H:%M:%S'),
                '-T', end.strftime('%Y-%m-%d %H:%M:%S'), '-t', str(interval), '-o', 'csv', '-B', 'byte', '-5'] + METRICS
-    result = subprocess.run(command, capture_output=True, text=True, timeout=40)
+    result = subprocess.run(command, capture_output=True, text=True, timeout=90)
     if result.returncode:
         raise RuntimeError('PCP history could not be read: '+result.stderr.strip()[:300])
     rows = []
@@ -174,6 +248,7 @@ def history(minutes):
                 continue
             total = sum(cpu) if all(v is not None for v in cpu) else 0
             swap_total, swap_free = number('mem.util.swapTotal'), number('mem.util.swapFree')
+            zram_percent, disk_percent = swap_split(row)
             def byte_rate(key):
                 value = number(key)
                 return value
@@ -181,6 +256,7 @@ def history(minutes):
                              wait=cpu[4]/total*100 if total else None,
                              memory=(physical-available)/physical*100,
                              swap=(swap_total-swap_free)/swap_total*100 if swap_total and swap_free is not None else 0,
+                             zram=zram_percent, diskSwap=disk_percent,
                              diskRead=byte_rate('disk.all.read_bytes'), diskWrite=byte_rate('disk.all.write_bytes'),
                              netIn=byte_rate('network.all.in.bytes'), netOut=byte_rate('network.all.out.bytes'),
                              load=number('kernel.all.load-1 minute')))
@@ -193,13 +269,17 @@ if __name__ == '__main__':
     try:
         if len(sys.argv) == 3 and sys.argv[1] == 'history':
             minutes = int(sys.argv[2])
-            if minutes not in (30, 60, 360, 1440):
+            if minutes not in PRESET_MINUTES:
                 raise ValueError('Unsupported time range')
             print(json.dumps(history(minutes)))
+        elif len(sys.argv) == 4 and sys.argv[1] == 'history-range':
+            # Epoch milliseconds, so the browser's timezone never matters.
+            start, end = (dt.datetime.fromtimestamp(int(value)/1000) for value in sys.argv[2:4])
+            print(json.dumps(history(start=start, end=end)))
         elif sys.argv[1:] == ['live']:
             live()
         else:
-            raise ValueError('Expected live or history <minutes>')
+            raise ValueError('Expected live, history <minutes> or history-range <start-ms> <end-ms>')
     except (BrokenPipeError, KeyboardInterrupt):
         pass
     except Exception as exc:

@@ -4,16 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Pi monitor</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=@VERSION@">
   <script src="../base1/cockpit.js"></script>
-  <script src="ram-model.js" defer></script>
-  <script src="app.js" defer></script>
+  <script src="ram-model.js?v=@VERSION@" defer></script>
+  <script src="app.js?v=@VERSION@" defer></script>
 </head>
 <body>
 <main>
   <header class="page-header">
     <div><div class="eyebrow">SYSTEM PERFORMANCE</div><h1>Pi monitor</h1><p class="subtitle">A clearer view of your Pi.</p></div>
-    <div class="controls"><span id="connection" class="status">Connecting…</span><label for="range" class="sr-only">Graph time range</label><select id="range"><option value="30">Last 30 minutes</option><option value="60" selected>Last hour</option><option value="360">Last 6 hours</option><option value="1440">Last 24 hours</option></select><button id="refresh" title="Reload recorded history">Refresh</button></div>
+    <div class="controls"><span id="connection" class="status">Connecting…</span><label for="range" class="sr-only">Graph time range</label><select id="range"><option value="30">Last 30 minutes</option><option value="60" selected>Last hour</option><option value="360">Last 6 hours</option><option value="1440">Last 24 hours</option><option value="2880">Last 2 days</option><option value="10080">Last 7 days</option><option value="custom">Custom range…</option></select><button id="refresh" title="Reload recorded history">Refresh</button></div>
+    <form id="custom-range" class="custom-range" hidden><label>From <input type="datetime-local" id="range-start" required></label><label>To <input type="datetime-local" id="range-end" required></label><button type="submit">Apply</button><span id="custom-error" class="custom-error" role="alert"></span></form>
   </header>
   <div id="error" role="status" hidden></div>
   <section class="summary" aria-label="Current system metrics">
@@ -24,7 +25,7 @@
   </section>
   <section class="charts" aria-label="Performance over time">
     <article class="card"><div class="card-heading"><div><h2>CPU activity</h2><p>Processing and time waiting for storage</p></div><span id="cpu-chart-value" class="chart-value">—</span></div><div id="chart-cpu" class="chart" tabindex="0" role="img" aria-label="CPU activity history. Use left and right arrows to inspect readings."></div><div class="legend"><span><i class="blue"></i>Active CPU</span><span><i class="amber"></i>Storage wait</span></div></article>
-    <article class="card"><div class="card-heading"><div><h2>Memory</h2><p>RAM and swap in use</p></div><span id="memory-chart-value" class="chart-value">—</span></div><div id="chart-memory" class="chart" tabindex="0" role="img" aria-label="Memory history. Use left and right arrows to inspect readings."></div><div class="legend"><span><i class="violet"></i>RAM</span><span><i class="amber"></i>Swap</span></div></article>
+    <article class="card"><div class="card-heading"><div><h2>Memory</h2><p>RAM, zram swap and SD swap in use</p></div><span id="memory-chart-value" class="chart-value">—</span></div><div id="chart-memory" class="chart" tabindex="0" role="img" aria-label="Memory history. Use left and right arrows to inspect readings."></div><div class="legend"><span><i class="violet"></i>RAM</span><span><i class="teal"></i>zram swap</span><span><i class="amber"></i>SD swap</span></div></article>
     <article class="card"><div class="card-heading"><div><h2>Disk activity</h2><p>Combined physical disks</p></div><span id="disk-chart-value" class="chart-value">—</span></div><div id="chart-disk" class="chart" tabindex="0" role="img" aria-label="Disk throughput history. Use left and right arrows to inspect readings."></div><div class="legend"><span><i class="teal"></i>Read</span><span><i class="blue"></i>Write</span></div></article>
     <article class="card"><div class="card-heading"><div><h2>Network traffic</h2><p>Received and sent across network interfaces</p></div><span id="network-chart-value" class="chart-value">—</span></div><div id="chart-network" class="chart" tabindex="0" role="img" aria-label="Network throughput history. Use left and right arrows to inspect readings."></div><div class="legend"><span><i class="blue"></i>Received</span><span><i class="teal"></i>Sent</span></div></article>
   </section>
